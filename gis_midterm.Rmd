@@ -1,0 +1,23 @@
+---
+title: "gis_midterm"
+author: "Lyuou Zhang"
+date: "3/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(maps)
+
+```
+
+## Question 1: NY County Health Rankings Data
+
+
+
+```{r}
+cali_cty <- map('county', 'california')
+
+
+```
+
