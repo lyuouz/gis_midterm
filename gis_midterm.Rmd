@@ -8,7 +8,11 @@ output: html_document
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(maps)
-
+library(stringr)
+library(maptools)
+library(RColorBrewer)
+library(classInt)
+library(readxl)
 ```
 
 ## Question 1: NY County Health Rankings Data
@@ -16,8 +20,68 @@ library(maps)
 
 
 ```{r}
-cali_cty <- map('county', 'california')
+# import the county boundary file of California
+cali_cty <- map('county', 'california', fill = TRUE, col = palette())
+
+# set county IDs by their names
+cali_names <- str_replace(cali_cty$names, 'california,', '') %>% 
+  str_replace(., ' ', '_')
+
+# convert cali_cty map to a spatial polygon object, identified by their names
+cali_cty_sp <- map2SpatialPolygons(cali_cty, IDs = cali_names, proj4string = CRS("+init=epsg:2261"))
+
 
 
 ```
+
+```{r}
+# read the ranking data
+cali_rank <- read_excel('./data/2018 County Health Rankings California Data - v3.xls', sheet = 'Outcomes & Factors Rankings', skip = 1) %>% 
+  janitor::clean_names() %>% 
+  dplyr::select(-state) %>% 
+  dplyr::rename(
+    outcome_z = z_score,
+    outcome_rank = rank,
+    factor_z = z_score_1,
+    factor_rank = rank_1
+  ) %>% 
+  dplyr::filter(!is.na(county)) %>% 
+  dplyr::mutate(
+    factor_rank = as.integer(factor_rank),
+    county = tolower(county),
+    county = str_replace(county, ' ', '_')
+  ) %>% 
+  as.data.frame()
+
+row.names(cali_rank) <- cali_rank$county
+
+```
+
+join California map and the data of each county
+
+```{r}
+cali_df <- SpatialPolygonsDataFrame(cali_cty_sp, cali_rank, match.ID = TRUE)
+
+cali_df$factor_z <- as.numeric(cali_df$factor_z)
+
+```
+
+Customizing the plot
+
+```{r}
+plotvar <- cali_df$factor_z
+nclr <- 5
+class <- classIntervals(cali_df$factor_z, nclr, style = "quantile")
+plotclr <- brewer.pal(nclr, "Greens")
+colcode <- findColours(class, plotclr, digits = 3)
+
+plot(cali_df, col = colcode, border = "grey",axes = F)
+title(main = "Overall Health Factors by County in California:\n Lyuou Zhang", 
+      sub = "Data Source: http://www.countyhealthrankings.org/rankings/data/CA")
+legend("bottomleft", legend = names(attr(colcode,"table")), 
+       fill = attr(colcode, "palette"), cex=0.55)
+
+```
+
+
 
