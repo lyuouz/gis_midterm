@@ -1,8 +1,8 @@
 ---
-title: "gis_midterm"
+title: "GIS Midterm"
 author: "Lyuou Zhang"
 date: "3/5/2019"
-output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
@@ -17,7 +17,9 @@ library(readxl)
 
 ## Question 1: NY County Health Rankings Data
 
+### Import data & join
 
+Import the California county shapefile
 
 ```{r}
 # import the county boundary file of California
@@ -33,6 +35,8 @@ cali_cty_sp <- map2SpatialPolygons(cali_cty, IDs = cali_names, proj4string = CRS
 
 
 ```
+
+Import the health ranking data:
 
 ```{r}
 # read the ranking data
@@ -57,7 +61,7 @@ row.names(cali_rank) <- cali_rank$county
 
 ```
 
-join California map and the data of each county
+Join California map and the data of each county
 
 ```{r}
 cali_df <- SpatialPolygonsDataFrame(cali_cty_sp, cali_rank, match.ID = TRUE)
@@ -66,22 +70,145 @@ cali_df$factor_z <- as.numeric(cali_df$factor_z)
 
 ```
 
-Customizing the plot
+### Plotting using ggplot
+
 
 ```{r}
-plotvar <- cali_df$factor_z
-nclr <- 5
-class <- classIntervals(cali_df$factor_z, nclr, style = "quantile")
-plotclr <- brewer.pal(nclr, "Greens")
-colcode <- findColours(class, plotclr, digits = 3)
 
-plot(cali_df, col = colcode, border = "grey",axes = F)
-title(main = "Overall Health Factors by County in California:\n Lyuou Zhang", 
-      sub = "Data Source: http://www.countyhealthrankings.org/rankings/data/CA")
-legend("bottomleft", legend = names(attr(colcode,"table")), 
-       fill = attr(colcode, "palette"), cex=0.55)
+cali_df@data$id <- row.names(cali_df@data)
+gpclibPermit()
+
+cali_df.fort <- broom::tidy(cali_df, region = 'id')
+cali_df_plot <- plyr::join(cali_df.fort, cali_df@data, by = 'id')
+head(cali_df_plot)
+```
+
+```{r}
+# plotting with ggplot
+ggplot(cali_df_plot) + aes(long, lat, group = group, fill = cut_number(factor_z, 5)) + 
+  geom_polygon() +
+  geom_path(color = 'black') + 
+  coord_equal() + 
+  scale_fill_brewer(name="Quantile", palette="Greens", 
+                    labels=c("1st",
+                             "2nd",
+                             "3rd",
+                             "4th",
+                             "5th")) +
+  labs(
+    title = "Overall Health Factors by County in California:\n Lyuou Zhang",
+    x = "Longitude",
+    y = "Latitude",
+    caption = "Data Source: http://www.countyhealthrankings.org/rankings/data/CA"
+  ) +
+  theme(axis.text=element_text(size = 10),                       
+        axis.title=element_text(size = 10),
+        plot.title = element_text(face="bold",size=20,hjust = 0.5),
+        legend.position=c(0.91,0.58)) +
+  ggsn::north(cali_df_plot, scale = 0.15, symbol=1, location="topright") +
+  ggsn::scalebar(cali_df_plot, dist = 100, st.dist=0.05, st.size=4,
+           dd2km = T, model = 'WGS84', 
+           location="bottomleft")
+
 
 ```
 
+## Question 2: Mapping in Python
+
+**This part joins all the health data with the shapefile, which is to be used in Python**
+
+join california map with other data
+
+read other variables from the Excel sheet
+
+```{r}
+
+cali_data <- read_excel('./data/2018 County Health Rankings California Data - v3.xls', sheet = 'Ranked Measure Data', skip = 1) %>% 
+  janitor::clean_names() %>% 
+  select(fips, county, starts_with('percent_')) %>% 
+  select(fips, county, percent_fair_poor, percent_obese, percent_physically_inactive, percent_with_access, percent_excessive_drinking, percent_smokers) %>% 
+  mutate(county = tolower(county),
+         county = str_replace(county, ' ', '_')) %>% 
+  filter(!is.na(county)) %>% 
+  as.data.frame()
+
+# Assign row names
+row.names(cali_data) <- cali_data$county
+
+cali_poly <- SpatialPolygonsDataFrame(cali_cty_sp, cali_data, match.ID = TRUE)
+
+#rgdal::writeOGR(cali_poly, dsn = "data", layer = "cali_health_data", driver = "ESRI Shapefile")
+
+```
+
+## Question 3: Interpolating trees
+
+### Import datasets
+
+```{r}
+# import trees
+trees <- read_csv('./data/Trees_NTA.csv') %>% 
+  janitor::clean_names() %>% 
+  rename(n_trees = trees)
+
+# import tract centroids
+centroid <- read_csv('./data/NYC_Tract_lat_long.csv',
+                     col_types = cols(
+                       GEOID = col_character()
+                     )) %>% 
+  janitor::clean_names()
+
+
+```
+
+### plot by longitude and latitude
+
+```{r}
+# plot the trees
+trees %>% 
+  ggplot(aes(x = long, y = lat)) + geom_point(aes(size = n_trees), alpha = 0.5)
+
+# plot the centroid of tracts
+centroid %>% 
+  ggplot(aes(x = xcoord, y = ycoord)) + geom_point()
+
+```
+
+### Interpolation
+
+```{r}
+
+coordinates(trees)= ~long+lat
+
+# create grid
+grid <- trees %>% 
+  spsample(., 'regular', n = 5000) %>% 
+  as.data.frame()
+
+# assign coordinates for grid
+coordinates(grid) <- c("x1","x2")   
+gridded(grid) <- T
+fullgrid(grid) <- T
+
+# project grid to the same projection as trees
+proj4string(grid) <- proj4string(trees)
+
+# idw and raster map
+trees_idw <- gstat::idw(n_trees ~ 1, trees, newdata = grid, idp = 2.0)
+raster_trees <- raster::raster(trees_idw)
+plot(raster_trees)
+
+```
+
+### Sample the raster map with the tract points 
+
+```{r}
+
+trees_xy <- centroid[,c('xcoord', 'ycoord')]
+centroid$tree_sample <- raster::extract(raster_trees, trees_xy)
+
+# data.table::fwrite(centroid, "./data/centroid.csv")
+
+```
 
 
